@@ -6,8 +6,9 @@ import { loadSettings, saveSettings, repoKey, loadRepoCache, saveRepoCache } fro
 import { markdownToHtml } from "./markdown.js";
 import { h, clear, toast, confirmBox, promptBox, fieldForm } from "./ui.js";
 import { renderDialogue } from "./dialogue_view.js";
+import { loadHelp, renderHelp } from "./help.js";
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.3.0";
 
 const TABS = [
 	{ id: "docs", label: "문서", icon: "📖" },
@@ -31,6 +32,7 @@ export const state = {
 	busy: false,
 	offline: false,
 	conflicts: [],       // 초안을 원격 변경 위에 얹지 못한 파일
+	help: null,          // 도움말을 보고 있으면 절 id (docs/HELP.md 의 {#id})
 };
 
 const $view = () => document.getElementById("view");
@@ -61,7 +63,8 @@ function renderShell() {
 			h("div", { class: "brand" }, "Story Studio"),
 			h("select", { id: "repo-select", class: "input repo", onchange: (e) => onRepoSelect(e.target.value) }),
 			h("span", { id: "status", class: "status" }),
-			h("button", { class: "btn small", id: "reload", title: "GitHub 에서 다시 받기", onclick: () => state.repo && openRepo(state.repo, true) }, "⟳")),
+			h("button", { class: "btn small", id: "reload", title: "GitHub 에서 다시 받기", onclick: () => state.repo && openRepo(state.repo, true) }, "⟳"),
+			h("button", { class: "btn small", id: "help", title: "도움말 — 지금 탭의 사용법", onclick: () => openHelp() }, "?")),
 		h("nav", { id: "tabs", class: "tabs" },
 			TABS.map((t) => h("button", { class: "tab", "data-tab": t.id, onclick: () => setTab(t.id) }, h("span", { class: "ico" }, t.icon), h("span", { class: "lbl" }, t.label)))),
 		h("main", { id: "view", class: "view" }),
@@ -85,6 +88,7 @@ async function onRepoSelect(key) {
 
 export function setTab(id) {
 	state.tab = id;
+	state.help = null;
 	state.detail = false;
 	render();
 	window.scrollTo(0, 0);
@@ -230,10 +234,26 @@ async function saveDrafts() {
 
 // ── 화면 ─────────────────────────────────────────────
 
+// 지금 탭의 도움말. 저장소를 아직 안 열었으면 「처음 시작」
+export function openHelp(id) {
+	state.help = id || (!state.project && state.tab !== "settings" ? "start" : state.tab);
+	render();
+	window.scrollTo(0, 0);
+}
+
 export function render() {
 	updateStatus();
 	const v = clear($view());
-	v.className = "view tab-" + state.tab;
+	v.className = "view tab-" + (state.help ? "help" : state.tab);
+	if (state.help) {
+		document.querySelectorAll(".tab").forEach((b) => b.classList.remove("on"));
+		loadHelp().then((list) => {
+			if (!state.help) return;
+			clear(v);
+			renderHelp(v, list, state.help, (id) => openHelp(id), () => { state.help = null; render(); });
+		}).catch((e) => { v.append(h("div", { class: "empty" }, e.message)); });
+		return;
+	}
 	if (state.tab === "settings") return renderSettings(v);
 	if (!state.project) {
 		v.append(h("div", { class: "empty" }, state.busy ? "불러오는 중…" : "위에서 게임 저장소를 고르거나 「설정」에서 토큰과 저장소를 넣으세요."));
