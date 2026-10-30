@@ -7,7 +7,7 @@ import { markdownToHtml } from "./markdown.js";
 import { h, clear, toast, confirmBox, promptBox, fieldForm } from "./ui.js";
 import { renderDialogue } from "./dialogue_view.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
 
 const TABS = [
 	{ id: "docs", label: "문서", icon: "📖" },
@@ -852,7 +852,9 @@ function renderSettings(v) {
 					saveSettings(s);
 					try {
 						const u = await new GitHub(s.token).user();
-						toast(`연결됨: ${u.login}`);
+						toast(`연결됨: ${u.login} — 저장소를 엽니다`);
+						const repos = s.repos.filter((r) => r.owner && r.name);
+						if (repos.length) await openRepo(repos.find((r) => repoKey(r) === s.current) || repos[0]);
 					} catch (e) {
 						toast(e.message, true);
 					}

@@ -1,5 +1,5 @@
 // 앱 화면 파일을 캐시해 오프라인에서도 열리게 한다. GitHub API 요청은 캐시하지 않는다 (데이터 캐시는 IndexedDB).
-const CACHE = "story-studio-v0.2.0";
+const CACHE = "story-studio-v0.2.1";
 const SHELL = ["./", "index.html", "style.css", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
 	"js/app.js", "js/dialogue_view.js", "js/github.js", "js/markdown.js", "js/project.js", "js/store.js", "js/storyjson.js", "js/ui.js", "js/validator.js"];
 
