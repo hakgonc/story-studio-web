@@ -1,4 +1,5 @@
 // Story Studio 웹: GitHub 저장소의 스토리 데이터(story-data/1)를 브라우저에서 고치고 커밋한다.
+// PC 판(StoryStudio.exe)에서는 같은 화면이 PC 폴더를 직접 읽고 쓰고 git 을 부른다 (local.js)
 import { GitHub, GitHubError, gitBlobSha } from "./github.js";
 import { StoryProject, isStoryPath, PROFILE_PATH, arr, obj } from "./project.js";
 import { StoryValidator, issueText, OBJECTIVE_TYPES } from "./validator.js";
@@ -7,8 +8,9 @@ import { markdownToHtml } from "./markdown.js";
 import { h, clear, toast, confirmBox, promptBox, fieldForm } from "./ui.js";
 import { renderDialogue } from "./dialogue_view.js";
 import { loadHelp, renderHelp } from "./help.js";
+import { DESKTOP, local, localRepo, LocalError } from "./local.js";
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 
 const TABS = [
 	{ id: "docs", label: "문서", icon: "📖" },
@@ -16,7 +18,7 @@ const TABS = [
 	{ id: "dialogue", label: "대사", icon: "💬" },
 	{ id: "cast", label: "인물", icon: "👤" },
 	{ id: "check", label: "점검", icon: "✔" },
-	{ id: "commit", label: "커밋", icon: "⬆" },
+	{ id: "commit", label: DESKTOP ? "저장·Git" : "커밋", icon: "⬆" },
 	{ id: "settings", label: "설정", icon: "⚙" },
 ];
 
@@ -43,7 +45,8 @@ export async function start() {
 	renderShell();
 	const s = state.settings;
 	const cur = s.repos.find((r) => repoKey(r) === s.current) || s.repos[0];
-	if (!s.token) {
+	document.addEventListener("keydown", onKey);
+	if (!s.token && !DESKTOP) {
 		state.tab = "settings";
 		render();
 		return;
@@ -55,6 +58,38 @@ export async function start() {
 	}
 }
 
+// F1 도움말, PC 판 Ctrl+S 저장
+function onKey(e) {
+	if (e.key === "F1") {
+		e.preventDefault();
+		openHelp();
+	} else if (DESKTOP && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+		e.preventDefault();
+		saveToDisk();
+	}
+}
+
+export function repoLabel(r) {
+	return r.path ? r.name : `${r.name} (${r.branch})`;
+}
+
+// 저장소 읽기: 웹은 GitHub API, PC 판은 PC 폴더
+function source(repo) {
+	if (DESKTOP) {
+		return {
+			head: () => local.head(repo.path),
+			tree: () => local.tree(repo.path),
+			read: (path) => local.read(repo.path, path),
+		};
+	}
+	const gh = new GitHub(state.settings.token);
+	return {
+		head: () => gh.headCommit(repo.owner, repo.name, repo.branch),
+		tree: (head) => gh.tree(repo.owner, repo.name, head.tree),
+		read: (path, sha) => gh.blobText(repo.owner, repo.name, sha),
+	};
+}
+
 function renderShell() {
 	const app = document.getElementById("app");
 	clear(app);
@@ -63,7 +98,7 @@ function renderShell() {
 			h("div", { class: "brand" }, "Story Studio"),
 			h("select", { id: "repo-select", class: "input repo", onchange: (e) => onRepoSelect(e.target.value) }),
 			h("span", { id: "status", class: "status" }),
-			h("button", { class: "btn small", id: "reload", title: "GitHub 에서 다시 받기", onclick: () => state.repo && openRepo(state.repo, true) }, "⟳"),
+			h("button", { class: "btn small", id: "reload", title: DESKTOP ? "디스크에서 다시 읽기" : "GitHub 에서 다시 받기", onclick: () => state.repo && openRepo(state.repo, true) }, "⟳"),
 			h("button", { class: "btn small", id: "help", title: "도움말 — 지금 탭의 사용법", onclick: () => openHelp() }, "?")),
 		h("nav", { id: "tabs", class: "tabs" },
 			TABS.map((t) => h("button", { class: "tab", "data-tab": t.id, onclick: () => setTab(t.id) }, h("span", { class: "ico" }, t.icon), h("span", { class: "lbl" }, t.label)))),
@@ -77,7 +112,7 @@ function fillRepoSelect() {
 	clear(sel);
 	for (const r of state.settings.repos) {
 		const k = repoKey(r);
-		sel.append(h("option", { value: k, selected: state.repo && repoKey(state.repo) === k }, `${r.name} (${r.branch})`));
+		sel.append(h("option", { value: k, selected: state.repo && repoKey(state.repo) === k }, repoLabel(r)));
 	}
 }
 
@@ -89,6 +124,7 @@ async function onRepoSelect(key) {
 export function setTab(id) {
 	state.tab = id;
 	state.help = null;
+	if (DESKTOP && id === "commit") gitInfo = null; // 탭을 열 때마다 git 상태를 다시 읽음
 	state.detail = false;
 	render();
 	window.scrollTo(0, 0);
@@ -99,11 +135,12 @@ function updateStatus() {
 	if (!el) return;
 	const p = state.project;
 	const n = p ? Object.keys(p.changes()).length : 0;
-	el.textContent = state.busy ? "불러오는 중…" : p ? `${state.offline ? "오프라인 · " : ""}${n ? `변경 ${n}` : "변경 없음"}` : "";
+	el.textContent = state.busy ? "불러오는 중…" : p ? `${state.offline ? "오프라인 · " : ""}${n ? `${DESKTOP ? "저장 안 함" : "변경"} ${n}` : DESKTOP ? "저장됨" : "변경 없음"}` : "";
 	el.className = "status" + (n ? " dirty" : "");
 	document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === state.tab));
 	const commitTab = document.querySelector('.tab[data-tab="commit"] .lbl');
-	if (commitTab) commitTab.textContent = n ? `커밋 ${n}` : "커밋";
+	const cl = DESKTOP ? "저장·Git" : "커밋";
+	if (commitTab) commitTab.textContent = n ? `${cl} ${n}` : cl;
 }
 
 // ── 불러오기 ─────────────────────────────────────────
@@ -118,13 +155,14 @@ export async function openRepo(repo, forceRemote = false) {
 	state.sel = {};
 	state.detail = false;
 	state.conflicts = [];
+	gitInfo = null;
 	updateStatus();
-	clear($view()).append(h("div", { class: "empty" }, `${repo.owner}/${repo.name} 불러오는 중…`));
+	clear($view()).append(h("div", { class: "empty" }, `${repo.path || repo.owner + "/" + repo.name} 불러오는 중…`));
 	const key = repoKey(repo);
 	const cache = await loadRepoCache(key);
 	try {
-		const gh = new GitHub(state.settings.token);
-		const head = await gh.headCommit(repo.owner, repo.name, repo.branch);
+		const src = source(repo);
+		const head = await src.head();
 		let files = {}, meta = {}, allPaths = null;
 		if (cache && cache.head && cache.head.sha === head.sha && !forceRemote) {
 			for (const [p, f] of Object.entries(cache.files)) {
@@ -133,12 +171,12 @@ export async function openRepo(repo, forceRemote = false) {
 			}
 			allPaths = cache.allPaths || null;
 		} else {
-			const t = await gh.tree(repo.owner, repo.name, head.tree);
+			const t = await src.tree(head);
 			allPaths = t.truncated ? null : t.entries.map((e) => e.path);
 			const shaOf = Object.fromEntries(t.entries.map((e) => [e.path, e.sha]));
 			const old = cache ? cache.files : {};
 			const want = t.entries.filter((e) => isStoryPath(e.path)).map((e) => e.path);
-			await fetchBlobs(gh, repo, want, shaOf, old, files, meta);
+			await fetchBlobs(src, want, shaOf, old, files, meta);
 			// 문서 목록은 project.json 에 있음
 			let docs = [];
 			try {
@@ -146,7 +184,7 @@ export async function openRepo(repo, forceRemote = false) {
 			} catch (_) {
 				docs = [];
 			}
-			await fetchBlobs(gh, repo, docs.filter((d) => shaOf[d]), shaOf, old, files, meta);
+			await fetchBlobs(src, docs.filter((d) => shaOf[d]), shaOf, old, files, meta);
 		}
 		state.head = head;
 		state.meta = meta;
@@ -168,7 +206,7 @@ export async function openRepo(repo, forceRemote = false) {
 			state.project = new StoryProject(files, cache.allPaths || null);
 			applyDrafts(state.project, cache, state.meta);
 			state.offline = true;
-			toast("GitHub 에 연결 못 함 — 이 기기에 저장된 데이터로 엽니다 (" + e.message + ")", true);
+			toast((DESKTOP ? "폴더를 읽지 못함" : "GitHub 에 연결 못 함") + " — 이 기기에 저장된 데이터로 엽니다 (" + e.message + ")", true);
 		} else {
 			state.project = null;
 			state.busy = false;
@@ -183,14 +221,14 @@ export async function openRepo(repo, forceRemote = false) {
 	render();
 }
 
-async function fetchBlobs(gh, repo, paths, shaOf, old, files, meta) {
+async function fetchBlobs(src, paths, shaOf, old, files, meta) {
 	const queue = paths.slice();
 	const worker = async () => {
 		while (queue.length) {
 			const p = queue.shift();
 			const sha = shaOf[p];
 			if (old[p] && old[p].sha === sha) files[p] = old[p].text;
-			else files[p] = await gh.blobText(repo.owner, repo.name, sha);
+			else files[p] = await src.read(p, sha);
 			meta[p] = sha;
 		}
 	};
@@ -209,7 +247,7 @@ function applyDrafts(project, cache, meta) {
 		const err = project.applyText(path, text);
 		if (err) toast("초안 적용 실패: " + err, true);
 	}
-	if (state.conflicts.length) toast(`원격에서 바뀐 파일 ${state.conflicts.length}개에 이 기기 초안이 있음 — 「커밋」 탭에서 고르세요`, true);
+	if (state.conflicts.length) toast(DESKTOP ? `디스크에서 바뀐 파일 ${state.conflicts.length}개에 저장 안 한 변경이 있음 — 「저장·Git」 탭에서 고르세요` : `원격에서 바뀐 파일 ${state.conflicts.length}개에 이 기기 초안이 있음 — 「커밋」 탭에서 고르세요`, true);
 }
 
 let draftTimer = 0;
@@ -236,7 +274,8 @@ async function saveDrafts() {
 
 // 지금 탭의 도움말. 저장소를 아직 안 열었으면 「처음 시작」
 export function openHelp(id) {
-	state.help = id || (!state.project && state.tab !== "settings" ? "start" : state.tab);
+	const tabHelp = DESKTOP ? ({ commit: "pc-git", settings: "pc-settings" })[state.tab] || state.tab : state.tab;
+	state.help = id || (!state.project && state.tab !== "settings" ? "start" : tabHelp);
 	render();
 	window.scrollTo(0, 0);
 }
@@ -250,7 +289,9 @@ export function render() {
 		loadHelp().then((list) => {
 			if (!state.help) return;
 			clear(v);
-			renderHelp(v, list, state.help, (id) => openHelp(id), () => { state.help = null; render(); });
+			// PC 판은 「(웹)」 절, 웹은 「(PC)」 절을 빼고 보여 줌
+			const mine = list.filter((x) => !x.title.includes(DESKTOP ? "(웹)" : "(PC)"));
+			renderHelp(v, mine, state.help, (id) => openHelp(id), () => { state.help = null; render(); });
 		}).catch((e) => { v.append(h("div", { class: "empty" }, e.message)); });
 		return;
 	}
@@ -727,6 +768,7 @@ function gotoIssue(i) {
 
 // ── 커밋 ──
 function renderCommit(v) {
+	if (DESKTOP) return renderDesktopGit(v);
 	const p = state.project;
 	const changes = p.changes();
 	const paths = Object.keys(changes).sort();
@@ -841,8 +883,218 @@ async function doCommit(message) {
 	render();
 }
 
+// ── PC 판: 저장·Git ──
+// 저장 = 바뀐 파일을 PC 폴더에 씀. 커밋 = git status 의 스토리 데이터·문서만 커밋 (게임 코드 등 다른 파일은 그대로)
+let gitInfo = null;   // 마지막 git status
+let gitLog = "";      // 마지막 git 출력
+
+async function refreshGit() {
+	if (!state.repo || !state.repo.path) return;
+	try {
+		gitInfo = { ...(await local.status(state.repo.path)), repo: state.repo.path };
+	} catch (e) {
+		gitInfo = { repo: state.repo.path, git: false, error: e.message };
+	}
+	if (state.tab === "commit" && !state.help) render();
+}
+
+export async function saveToDisk(force = false) {
+	const p = state.project;
+	if (!p || !state.repo || !state.repo.path) return false;
+	const changes = p.changes();
+	if (!Object.keys(changes).length) {
+		toast("저장할 변경이 없음");
+		return true;
+	}
+	const expect = {};
+	for (const path of Object.keys(changes)) expect[path] = state.meta[path] || "";
+	let result;
+	try {
+		result = await local.save(state.repo.path, changes, expect, force);
+	} catch (e) {
+		if (e instanceof LocalError && e.status === 409 && !force) {
+			const clash = (e.body.clash || []).join("\n");
+			if (await confirmBox(`그사이 디스크에서 바뀐 파일이 있습니다 (게임 세션·git pull 등):\n${clash}\n\n내 내용으로 덮어쓸까요? (취소하면 저장 안 함 — ⟳ 로 다시 읽은 뒤 고치세요)`, "덮어쓰기")) return saveToDisk(true);
+			return false;
+		}
+		toast("저장 실패: " + e.message, true);
+		return false;
+	}
+	for (const [path, sha] of Object.entries(result.shas)) {
+		if (sha === null) delete state.meta[path];
+		else state.meta[path] = sha;
+	}
+	p.markCommitted(changes);
+	state.head = result.head;
+	const key = repoKey(state.repo);
+	const cache = (await loadRepoCache(key)) || {};
+	cache.head = state.head;
+	cache.files = Object.fromEntries(Object.keys(p.original).map((path) => [path, { sha: state.meta[path], text: p.original[path] }]));
+	cache.drafts = {};
+	cache.draftBase = {};
+	await saveRepoCache(key, cache);
+	toast(`저장함: ${Object.keys(changes).length}개 파일`);
+	render();
+	refreshGit();
+	return true;
+}
+
+async function gitAction(name, fn, append = false) {
+	state.busy = true;
+	updateStatus();
+	try {
+		const r = await fn();
+		gitLog = (append ? gitLog + "\n" : "") + ((r && r.log) || "");
+		toast(name + " 완료");
+		return true;
+	} catch (e) {
+		gitLog = (append ? gitLog + "\n" : "") + ((e.body && e.body.log) || e.message);
+		toast(name + " 실패 — 아래 기록", true);
+		return false;
+	} finally {
+		state.busy = false;
+		updateStatus();
+		await refreshGit();
+		render();
+	}
+}
+
+function renderDesktopGit(v) {
+	const p = state.project;
+	const repo = state.repo;
+	const changes = p.changes();
+	const paths = Object.keys(changes).sort();
+	const val = new StoryValidator(p);
+	val.check();
+	if (!gitInfo || gitInfo.repo !== repo.path) {
+		gitInfo = { repo: repo.path, loading: true };
+		local.status(repo.path).then((g) => { gitInfo = { ...g, repo: repo.path }; if (state.tab === "commit" && !state.help) render(); })
+			.catch((e) => { gitInfo = { repo: repo.path, git: false, error: e.message }; render(); });
+	}
+	const g = gitInfo;
+	const story = g.story || [];
+	const msg = h("input", { class: "input", placeholder: "커밋 메시지 (예: docs: 4장 줄거리 / feat: m04_01 미션 데이터)", value: state.sel.commitMsg || "" });
+	msg.addEventListener("input", () => (state.sel.commitMsg = msg.value));
+	const pushAfter = h("input", { type: "checkbox", checked: state.sel.pushAfter !== false });
+	pushAfter.addEventListener("change", () => (state.sel.pushAfter = pushAfter.checked));
+	const head = state.head || {};
+	const branchLine = g.loading ? "git 상태 읽는 중…" : g.git === false ? (g.error || "Git 저장소가 아니거나 git 이 설치돼 있지 않음 (저장만 됨)")
+		: `브랜치 ${g.branch}${g.upstream ? ` → ${g.upstream}` : ""}${g.ahead ? ` · 올릴 커밋 ${g.ahead}` : ""}${g.behind ? ` · 받을 커밋 ${g.behind}` : ""}`;
+	const busy = state.busy;
+	v.append(h("div", { class: "commit" },
+		h("div", { class: "card" },
+			h("div", {}, h("b", {}, repo.name), " ", h("span", { class: "hint" }, repo.path)),
+			h("div", { class: "hint" }, `${branchLine} · 마지막 커밋 ${head.message || "-"}`),
+			h("div", { class: "row wrap" },
+				h("button", { class: "btn small", disabled: busy || g.git === false, onclick: () => gitAction("풀", () => local.pull(repo.path)).then((ok) => ok && openRepo(repo)) }, "풀 (rebase)"),
+				h("button", { class: "btn small", disabled: busy || g.git === false, onclick: () => gitAction("푸시", () => local.push(repo.path)) }, "푸시"),
+				h("button", { class: "btn small", disabled: busy, title: "Studio 의 점검 코드를 addons/story_core/, tools/story_tool.gd, data/story/FORMAT.md 로 복사", onclick: async () => {
+					if (!(await confirmBox("게임 도구 갱신: Studio 의 점검 코드와 형식 문서를 이 저장소에 복사합니다\n(addons/story_core/, tools/story_tool.gd, data/story/FORMAT.md). 복사한 뒤 게임 쪽에서 커밋하세요.", "복사"))) return;
+					gitAction("게임 도구 갱신", async () => { const r = await local.vendor(repo.path); return { log: "복사함:\n" + r.written.join("\n") }; });
+				} }, "게임 도구 갱신"))),
+		state.conflicts.length ? h("div", { class: "card warn" },
+			h("b", {}, "디스크에서 바뀐 파일에 저장 안 한 변경이 있음"),
+			state.conflicts.map((c) => h("div", { class: "row" }, h("code", {}, c.path),
+				h("button", { class: "btn small", onclick: () => resolveConflict(c, true) }, "내 변경 쓰기"),
+				h("button", { class: "btn small", onclick: () => resolveConflict(c, false) }, "디스크 것 쓰기")))) : null,
+		h("div", { class: "card" },
+			h("h3", {}, paths.length ? `저장 안 한 변경 ${paths.length}개` : "저장 안 한 변경 없음"),
+			paths.map((path) => h("div", { class: "change" }, h("span", { class: "tag " + (changes[path] === null ? "del" : p.original[path] === undefined ? "add" : "mod") },
+				changes[path] === null ? "삭제" : p.original[path] === undefined ? "새로" : "수정"), h("code", {}, path), h("span", { class: "hint" }, diffStat(p.original[path], changes[path])))),
+			h("div", { class: "row wrap" },
+				h("button", { class: "btn primary", disabled: !paths.length || busy, onclick: () => saveToDisk() }, "저장 (Ctrl+S)"),
+				h("button", { class: "btn danger", disabled: !paths.length || busy, onclick: discardAll }, "변경 모두 버리기")),
+			h("div", { class: "hint" }, "저장 안 한 변경은 이 PC 에 초안으로 남아, 프로그램을 닫았다 열어도 그대로입니다.")),
+		h("div", { class: "card" },
+			h("h3", {}, g.git === false ? "Git" : story.length ? `커밋할 스토리 데이터·문서 ${story.length}개` : "커밋할 것 없음"),
+			story.map((f) => h("div", { class: "change" }, h("span", { class: "tag " + (f.status === "D" ? "del" : f.status === "??" || f.status === "A" ? "add" : "mod") }, f.status === "D" ? "삭제" : f.status === "??" || f.status === "A" ? "새로" : "수정"), h("code", {}, f.path))),
+			g.other ? h("div", { class: "hint" }, `그 밖의 변경 ${g.other}개(게임 작업 파일)는 여기서 커밋하지 않음`) : null,
+			(paths.length || story.length) ? h("div", { class: val.errorCount() ? "warn" : "hint" }, val.errorCount() ? `점검 오류 ${val.errorCount()}개가 있는 채로 커밋됩니다 (「점검」 탭)` : `점검 오류 없음 · 경고 ${val.warnCount()}`) : null,
+			msg,
+			h("div", { class: "row wrap" },
+				h("button", { class: "btn primary", disabled: busy || g.git === false || (!paths.length && !story.length), onclick: () => desktopCommit(msg.value, pushAfter.checked) }, paths.length ? "저장하고 커밋" : "커밋"),
+				h("label", { class: "row" }, pushAfter, "커밋 뒤 푸시")),
+			h("div", { class: "hint" }, "게임 세션에는 docs/GAME_SESSION_PROMPTS.md 3번 프롬프트로 알리세요.")),
+		gitLog ? h("div", { class: "card" }, h("h3", {}, "git 기록"), h("pre", { class: "script" }, gitLog)) : null));
+}
+
+async function desktopCommit(message, push) {
+	message = (message || "").trim();
+	if (!message) return toast("커밋 메시지를 쓰세요", true);
+	if (Object.keys(state.project.changes()).length && !(await saveToDisk())) return;
+	const repo = state.repo;
+	const st = await local.status(repo.path).catch(() => null);
+	const paths = st && st.story ? st.story.map((f) => f.path) : [];
+	if (!paths.length) return toast("커밋할 것이 없음");
+	const ok = await gitAction("커밋", () => local.commit(repo.path, message, paths));
+	if (!ok) return;
+	state.sel.commitMsg = "";
+	if (push) await gitAction("푸시", () => local.push(repo.path), true);
+	state.head = await local.head(repo.path).catch(() => state.head);
+	render();
+}
+
+// ── PC 판: 설정 ──
+let scanResult = null;
+
+async function addLocalRepo(path) {
+	path = (path || "").trim();
+	if (!path) return;
+	const c = await local.check(path).catch((e) => ({ ok: false, error: e.message }));
+	if (!c.ok) return toast("게임 저장소 폴더가 아님 (data/story/project.json 이 있는 폴더를 고르세요): " + path, true);
+	const r = localRepo(c.path || path);
+	const s = state.settings;
+	if (!s.repos.some((x) => repoKey(x) === repoKey(r))) s.repos.push(r);
+	saveSettings(s);
+	fillRepoSelect();
+	await openRepo(s.repos.find((x) => repoKey(x) === repoKey(r)));
+}
+
+function renderDesktopSettings(v) {
+	const s = state.settings;
+	const pathIn = h("input", { class: "input", placeholder: "폴더 경로 (예: C:\\Users\\hakgo\\like-a-hero)" });
+	v.append(h("div", { class: "settings" },
+		h("div", { class: "card" },
+			h("h3", {}, "게임 저장소 폴더"),
+			h("div", { class: "hint" }, "data/story/project.json 이 있는 게임 저장소 폴더. 고른 폴더의 파일을 직접 읽고 씁니다."),
+			h("div", { class: "items" }, s.repos.length ? s.repos.map((r, i) => h("div", { class: "row repo-row" },
+				h("button", { class: "item grow" + (state.repo && repoKey(state.repo) === repoKey(r) ? " on" : ""), onclick: () => openRepo(r) }, h("div", { class: "t" }, r.name), h("div", { class: "s" }, r.path)),
+				h("button", { class: "btn small danger", title: "목록에서 빼기 (폴더는 그대로)", onclick: () => { s.repos.splice(i, 1); saveSettings(s); fillRepoSelect(); render(); } }, "✕")))
+				: h("div", { class: "hint" }, "아직 없음 — 아래에서 폴더를 고르세요.")),
+			h("div", { class: "row wrap" },
+				h("button", { class: "btn primary", onclick: async () => {
+					try {
+						const r = await local.pick("게임 저장소 폴더 고르기 (data/story/project.json 이 있는 곳)");
+						if (r.path) await addLocalRepo(r.path);
+					} catch (e) {
+						toast(e.message, true);
+					}
+				} }, "폴더 고르기…"),
+				h("button", { class: "btn", onclick: async () => {
+					scanResult = { loading: true };
+					render();
+					scanResult = await local.scan().catch((e) => ({ error: e.message }));
+					render();
+				} }, "내 폴더에서 찾기")),
+			scanResult ? h("div", { class: "items" }, scanResult.loading ? h("div", { class: "hint" }, "찾는 중…")
+				: scanResult.error ? h("div", { class: "err" }, scanResult.error)
+				: scanResult.found.length ? scanResult.found.map((f) => h("div", { class: "row" }, h("code", { class: "grow" }, f),
+					s.repos.some((r) => repoKey(r) === repoKey(localRepo(f))) ? h("span", { class: "hint" }, "추가됨") : h("button", { class: "btn small", onclick: () => addLocalRepo(f) }, "+ 추가")))
+				: h("div", { class: "hint" }, "사용자 폴더 아래 3단계 안에서 찾지 못함 — 「폴더 고르기」나 경로를 직접 넣으세요.")) : null,
+			h("div", { class: "row" }, pathIn, h("button", { class: "btn", onclick: () => addLocalRepo(pathIn.value) }, "경로로 추가"))),
+		h("div", { class: "card" },
+			h("h3", {}, "이 PC"),
+			h("div", { class: "hint block" }, `Story Studio PC 판 ${VERSION}. 커밋·푸시는 이 PC 에 설치된 git(Git for Windows)과 그 로그인 설정을 씁니다. 저장 안 한 변경은 이 PC 에 초안으로 남습니다. 휴대폰에서는 웹 판(https://hakgonc.github.io/story-studio-web/)을 쓰세요.`),
+			h("button", { class: "btn danger", onclick: async () => {
+				if (!(await confirmBox("이 PC 의 Story Studio 설정·캐시·저장 안 한 변경을 모두 지울까요? (게임 저장소 파일은 그대로)", "지우기"))) return;
+				try { localStorage.clear(); indexedDB.deleteDatabase("story-studio"); } catch (_) { /* 무시 */ }
+				location.reload();
+			} }, "이 PC 의 Studio 데이터 지우기"))));
+}
+
 // ── 설정 ──
 function renderSettings(v) {
+	if (DESKTOP) return renderDesktopSettings(v);
 	const s = state.settings;
 	const token = h("input", { class: "input", type: "password", value: s.token, placeholder: "github_pat_…", autocomplete: "off" });
 	const repoRows = h("div", { class: "items" });
