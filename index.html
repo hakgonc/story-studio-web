@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Story Studio</title>
+<meta name="description" content="게임별 세계관·장·미션·대사·이벤트씬을 공통 형식(story-data/1)으로 고치고 GitHub 에 커밋하는 도구">
+<meta name="theme-color" content="#1f232b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Story Studio">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"><div class="empty">불러오는 중…</div></div>
+<noscript>자바스크립트를 켜야 쓸 수 있습니다.</noscript>
+<script type="module">
+	import { start } from "./js/app.js";
+	start();
+	if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
